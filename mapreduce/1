@@ -1,0 +1,78 @@
+
+        /ckage mapreduce
+
+import "fmt"
+import "sync"
+
+// schedule starts and waits for all tasks in the given phase (Map or Reduce).
+
+var doneWorkerChan = make(chan string, 1)
+
+func (mr *Master) schedule(phase jobPhase) {
+	var ntasks int
+	var nios int // number of inputs (for reduce) or outputs (for map)
+	switch phase {
+	case mapPhase:
+		ntasks = len(mr.files)
+		nios = mr.nReduce
+	case reducePhase:
+		ntasks = mr.nReduce
+		nios = len(mr.files)
+	}
+
+	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
+	// All ntasks tasks have to be scheduled on workers, and only once all of
+	// them have been completed successfully should the function return.
+	// Remember that workers may fail, and that any given worker may finish
+	// multiple tasks.
+	//
+	// TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO
+	//
+	var wg sync.WaitGroup
+	taskChan := make(chan *DoTaskArgs, ntasks)
+
+	for i := 0; i < ntasks; i++ {
+		task := &DoTaskArgs{
+			JobName:       mr.jobName,
+			File:          mr.files[i],
+			Phase:         phase,
+			TaskNumber:    i,
+			NumOtherPhase: nios,
+		}
+		wg.Add(1)
+		taskChan <- task
+	}
+
+	closeChan := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(closeChan)
+	}()
+
+Loop:
+	for {
+		select {
+		case t := <-taskChan:
+			var w string
+			select {
+			case w = <-mr.registerChannel:
+
+			case w = <-doneWorkerChan:
+			}
+			go mr.scheduleTask(w, t, doneWorkerChan, taskChan, &wg)
+		case <-closeChan:
+			break Loop
+		}
+	}
+
+	fmt.Printf("Schedule: %v phase done\n", phase)
+}
+
+func (mr *Master) scheduleTask(worker string, args *DoTaskArgs, doneWorker chan string, failTaskChan chan *DoTaskArgs, wg *sync.WaitGroup) {
+	if ok := call(worker, "Worker.DoTask", args, nil); ok {
+		wg.Done()
+		doneWorker <- worker
+	} else {
+		failTaskChan <- args
+	}
+}
